@@ -1,40 +1,39 @@
 ```mermaid
 graph TD
-    %% Define Node Shapes and Roles
-    subgraph System Components
+    %% System components (Servers and Client)
+    subgraph SystemComponents
         A[Client]
-        B[Server: Leader<br>10.0.2.3:5000]
-        C[Server: Follower 1<br>10.0.2.4:5000]
-        D[Server: Follower 2<br>10.0.2.5:5000]
+        B[Server: Leader]
+        C[Server: Follower 1]
+        D[Server: Follower 2]
     end
 
-    subgraph Core Data Structures
-        E((Leader lockMap<br>ConcurrentHashMap))
-        F((Follower 1 lockMap))
-        G((Follower 2 lockMap))
-        H((Leader followerServers<br>List of IPs))
+    %% Core Data Structures (The locks and server lists)
+    subgraph CoreDataStructures
+        E((lockMap - Leader))
+        F((lockMap - Follower 1))
+        G((lockMap - Follower 2))
+        H((followerServers List))
     end
     
-    %% Initial Setup (Registration)
-    subgraph Initial Setup
+    %% Initial Setup Flow
+    subgraph InitialSetup
         C -- REGISTER (IP:Port) --> B
         D -- REGISTER (IP:Port) --> B
-        B -- Stores Follower Info --> H
+        B -- Stores Follower Address --> H
     end
 
-    %% Write Operation (LOCK/UNLOCK) - Requires Leader Consensus
-    subgraph Write Operation (LOCK/UNLOCK)
+    %% Write Operation Flow (LOCK/UNLOCK)
+    subgraph WriteOperation[Write Operation: LOCK/UNLOCK]
         direction LR
         
-        A -- 1. LOCK Request (Client-to-Server) --> C
+        A -- 1. LOCK/UNLOCK Request --> C
+        C -- 2. Forward Request (to Leader) --> B
+        B -- 3. Update Lock State --> E
         
-        C -- 2. Forward LOCK Request (to Leader) --> B
-        
-        B -- 3. Update Lock Logic --> E
-        
-        %% Leader Synchronization
-        B -- 4. SYNC Lock State (Leader-to-Follower) --> C
-        B -- 4. SYNC Lock State (Leader-to-Follower) --> D
+        %% Synchronization Step
+        B -- 4. SYNC (Leader-to-Follower) --> C
+        B -- 4. SYNC (Leader-to-Follower) --> D
         
         C -- 5. Update Local Map --> F
         D -- 5. Update Local Map --> G
@@ -42,30 +41,30 @@ graph TD
         C -- 6. ACK Sync --> B
         D -- 6. ACK Sync --> B
         
-        B -- 7. Final Response (Success/Fail) --> C
-        C -- 8. Relays Response (to Client) --> A
+        B -- 7. Final Response --> C
+        C -- 8. Relays Response --> A
     end
 
-    %% Read Operation (OWN) - Local Read Optimization
-    subgraph Read Operation (OWN)
+    %% Read Operation Flow (OWN)
+    subgraph ReadOperation[Read Operation: OWN]
         direction LR
         
-        A -- OWN Request --> B
+        A -- OWN Request (to Leader) --> B
         B -- Check Local Lock State --> E
         B -- Response (Owner/NONE) --> A
         
-        A -- OWN Request --> C
+        A -- OWN Request (to Follower) --> C
         C -- Check Local Lock State --> F
         C -- Response (Owner/NONE) --> A
     end
 
-    %% Connect Data to Servers
-    B -. owns .-> E
+    %% Data Links
+    B -. uses .-> E
     B -. manages .-> H
     C -. replicates .-> F
     D -. replicates .-> G
-    
-    %% Styles
+
+    %% Styles for clarity
     classDef leader fill:#f9f,stroke:#333,stroke-width:2px;
     class B leader
     classDef follower fill:#fcc,stroke:#333;
