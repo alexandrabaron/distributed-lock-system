@@ -303,7 +303,7 @@ The system displays detailed logs with:
 - **Maria Stivala**
 - **Mathis Liens**
 - **Arnaud Brisset**
-- **Charles**
+- **Charles Pelong**
 - **Baptiste Halçaren**
 
 ---
