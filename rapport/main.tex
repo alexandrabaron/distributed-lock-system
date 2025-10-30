@@ -200,4 +200,6 @@ While functional, this implementation has several limitations that could be addr
 \section{Conclusion}
 We have successfully implemented a distributed lock system that fulfills the core requirements of the project. It uses a leader-follower architecture with a simple Java socket protocol to manage \texttt{LOCK}, \texttt{UNLOCK}, and \texttt{OWN} operations. The system ensures strong consistency by routing all write operations through the leader and using synchronous replication to update followers. Tests demonstrate the system's correctness in handling concurrent requests and maintaining a consistent state. This project serves as a solid foundation for understanding consensus and could be extended to include more advanced features like dynamic configuration and leader election.
 
+\section{Appendix}
+
 \end{document}
