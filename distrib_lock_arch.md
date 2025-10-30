@@ -1,86 +1,75 @@
 ```mermaid
 graph TD
-    %% Configuration des classes et des rôles
-    subgraph Components
-        A[Client.java]
-        B{Server: Leader<br>(10.0.2.3:5000)}
-        C{Server: Follower 1<br>(10.0.2.4:5000)}
-        D{Server: Follower 2<br>(10.0.2.5:5000)}
+    %% Define Node Shapes and Roles
+    subgraph System Components
+        A[Client]
+        B[Server: Leader<br>10.0.2.3:5000]
+        C[Server: Follower 1<br>10.0.2.4:5000]
+        D[Server: Follower 2<br>10.0.2.5:5000]
     end
 
-    %% Représentation des Data Structures Clés
-    subgraph Data Structures
-        E[Leader: lockMap<br>(ConcurrentHashMap)]
-        F[Follower 1: lockMap<br>(ConcurrentHashMap)]
-        G[Follower 2: lockMap<br>(ConcurrentHashMap)]
-        H[Leader: followerServers<br>(List)]
+    subgraph Core Data Structures
+        E((Leader lockMap<br>ConcurrentHashMap))
+        F((Follower 1 lockMap))
+        G((Follower 2 lockMap))
+        H((Leader followerServers<br>List of IPs))
     end
     
-    %% Connexion et Enregistrement Initial
+    %% Initial Setup (Registration)
     subgraph Initial Setup
-        C -- REGISTER (10.0.2.4:5000) --> B
-        D -- REGISTER (10.0.2.5:5000) --> B
-        B -- Store Follower Info --> H
+        C -- REGISTER (IP:Port) --> B
+        D -- REGISTER (IP:Port) --> B
+        B -- Stores Follower Info --> H
     end
 
-    %% Communication Flow: Write Operation (LOCK/UNLOCK)
-    subgraph Write Operation (e.g., LOCK)
+    %% Write Operation (LOCK/UNLOCK) - Requires Leader Consensus
+    subgraph Write Operation (LOCK/UNLOCK)
         direction LR
         
-        %% Client se connecte à n'importe quel serveur (ici, Follower)
-        A -- 1. LOCK/UNLOCK Request (Client-to-Server Protocol) --> C
+        A -- 1. LOCK Request (Client-to-Server) --> C
         
-        %% Le Follower forwarde au Leader
-        C -- 2. Forward Request (LOCK/UNLOCK, Client-to-Leader Protocol) --> B
+        C -- 2. Forward LOCK Request (to Leader) --> B
         
-        %% Le Leader exécute la logique
-        B -- 3. Update/Check Lock Logic --> E
-        E -- lockMap State Change --> B
+        B -- 3. Update Lock Logic --> E
         
-        %% Synchronisation du Leader vers les Followers
-        B -- 4. SYNC (LOCK/UNLOCK, Leader-to-Follower Protocol) --> C
-        B -- 4. SYNC (LOCK/UNLOCK, Leader-to-Follower Protocol) --> D
+        %% Leader Synchronization
+        B -- 4. SYNC Lock State (Leader-to-Follower) --> C
+        B -- 4. SYNC Lock State (Leader-to-Follower) --> D
         
         C -- 5. Update Local Map --> F
         D -- 5. Update Local Map --> G
         
-        %% ACK de Sync
-        C -- 6. ACK --> B
-        D -- 6. ACK --> B
+        C -- 6. ACK Sync --> B
+        D -- 6. ACK Sync --> B
         
-        %% Réponse finale au Client
-        B -- 7. Response (SUCCESS/FAIL) --> C
-        C -- 8. Response (SUCCESS/FAIL) --> A
+        B -- 7. Final Response (Success/Fail) --> C
+        C -- 8. Relays Response (to Client) --> A
     end
 
-    %% Communication Flow: Read Operation (OWN)
+    %% Read Operation (OWN) - Local Read Optimization
     subgraph Read Operation (OWN)
         direction LR
         
-        %% Client se connecte à n'importe quel serveur (ici, Leader)
-        A -- OWN Request (Client-to-Server Protocol) --> B
-        
-        %% Le Server (Leader ou Follower) répond directement
-        B -- Access Local Map --> E
-        E -- Read Owner --> B
+        A -- OWN Request --> B
+        B -- Check Local Lock State --> E
         B -- Response (Owner/NONE) --> A
         
-        %% Alternative pour Follower
-        A -- OWN Request (Client-to-Server Protocol) --> C
-        C -- Access Local Map --> F
-        F -- Read Owner --> C
+        A -- OWN Request --> C
+        C -- Check Local Lock State --> F
         C -- Response (Owner/NONE) --> A
     end
 
-    %% Lien des Data Structures aux Servers
-    B --> E
-    B --> H
-    C --> F
-    D --> G
-
-    %% Styles pour la clarté
-    classDef role fill:#f9f,stroke:#333,stroke-width:2px;
-    class B,C,D role
+    %% Connect Data to Servers
+    B -. owns .-> E
+    B -. manages .-> H
+    C -. replicates .-> F
+    D -. replicates .-> G
+    
+    %% Styles
+    classDef leader fill:#f9f,stroke:#333,stroke-width:2px;
+    class B leader
+    classDef follower fill:#fcc,stroke:#333;
+    class C,D follower
     classDef client fill:#ccf,stroke:#333;
     class A client
     classDef data fill:#afa,stroke:#333;
