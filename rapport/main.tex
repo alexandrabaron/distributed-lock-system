@@ -1,7 +1,11 @@
 \documentclass[a4paper,11pt]{article}
 
 % Language setting
-\usepackage[english]{babel} % Changed from french to english
+\usepackage[english]{babel}
+
+% Font and encoding - Good practice for PDF output
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
 
 % Page size and margins
 \usepackage[top=2cm,bottom=2cm,left=2.2cm,right=2.2cm,marginparwidth=1.75cm]{geometry}
@@ -10,8 +14,12 @@
 \usepackage{amsmath}
 \usepackage{graphicx}
 \usepackage{float} % Keep float for [H] or [htbp]
-\usepackage{hyperref}
+\usepackage[hidelinks]{hyperref} % Hidelinks removes the colored boxes
 \hypersetup{colorlinks=true,allcolors=blue}
+
+% Packages for better tables
+\usepackage{booktabs} % For professional tables (\toprule, \midrule, \bottomrule)
+\usepackage{array} % For table column formatting
 
 % Graphics path (images folder is at repo root, one level up from 'rapport')
 \graphicspath{{../images/}}
@@ -26,7 +34,7 @@
 
 \maketitle
 
-% University logo - Placed AFTER title and smaller, as requested
+% University logo - Placed AFTER title and smaller
 \begin{figure}[htbp]
 \centering
 \includegraphics[width=0.4\linewidth]{shanghai-jiao-tong-university.png}
@@ -58,53 +66,99 @@ We opted for a \textbf{leader-follower architecture} built on Java TCP sockets. 
     \item \textbf{Simple Error Handling}: The system relies on socket timeouts (5-10s) and explicit response codes (\texttt{SUCCESS}/\texttt{FAIL}/\texttt{NONE}/\texttt{ERROR}/\texttt{TIMEOUT}). This provides basic robustness against network delays or unresponsive servers without implementing a complex failure-detection and leader-election protocol, which was deemed outside the project's scope.
 \end{itemize}
 
-\section{Functional Architecture}
-The system consists of three distinct roles: Client, Leader, and Followers. The main interactions are:
+\section{Data Flow and Architecture}
+The system's functional architecture is centralized around the leader, which serializes all state changes. The interactions are as follows:
 
 \begin{enumerate}
-    \item \textbf{LOCK/UNLOCK (Write Operation)}: Client $\rightarrow$ Follower $\rightarrow$ Leader $\rightarrow$ All Followers (SYNC/ACK) $\rightarrow$ Leader $\rightarrow$ Follower $\rightarrow$ Client.
-    \item \textbf{OWN (Read Operation)}: Client $\rightarrow$ (Any) Server $\rightarrow$ Client.
+    \item \textbf{Write Operation (LOCK/UNLOCK)}: Client $\rightarrow$ Follower $\rightarrow$ Leader $\rightarrow$ All Followers (SYNC/ACK) $\rightarrow$ Leader $\rightarrow$ Follower $\rightarrow$ Client. If the client contacts the leader directly, the follower forwarding steps are skipped.
+    \item \textbf{Read Operation (OWN)}: Client $\rightarrow$ (Any) Server $\rightarrow$ Client. This operation is handled locally by whichever server receives it to ensure low latency.
 \end{enumerate}
 
-Consistency is ensured by serializing all mutation operations through the leader and using synchronous replication via \texttt{SYNC} messages. This guarantees that all nodes agree on the state before a write is confirmed. The data flow is also illustrated in the \texttt{README.md} sequence diagram.
+This flow is illustrated in Figure \ref{fig:mermaid}, which shows the sequence of network calls for both a write (\texttt{LOCK}) and a read (\texttt{OWN}) operation.
+
+% Note: This figure requires you to export your Mermaid diagram to "images/mermaid-flow.png"
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.85\linewidth]{images/mermaid.JPG}
+    \caption{Sequence diagram of system operations (LOCK and OWN).}
+    \label{fig:mermaid}
+\end{figure}
 
 \section{Structure of the Code}
-The repository contains three main Java classes:
+The project consists of three main Java classes:
+
 \begin{itemize}
-    \item \textbf{\texttt{Server.java}}: This is the core class, capable of running in either "leader" or "follower" mode based on a command-line argument. It listens on a TCP port and uses an \texttt{ExecutorService} to handle multiple connections.
+    \item \textbf{\texttt{Client.java}}: This class provides the client-facing API: \texttt{tryLock}, \texttt{tryUnLock}, and \texttt{ownTheLock}. Each operation opens a new, short-lived socket, sends its request message via \texttt{sendMsg()}, and reads the single-line response from the server.
+
+    \item \textbf{\texttt{DistributedLockTest.java}}: A test suite that uses a \texttt{FixedThreadPool} to simulate concurrent clients. These clients connect to different servers in the cluster (the leader at 10.0.2.3, and followers at 10.0.2.4 / 10.0.2.5) to verify concurrent lock acquisition, owner-reading, and lock release.
+    
+    \item \textbf{\texttt{Server.java}}: This is the core class, capable of running in either "leader" or "follower" mode. It uses a \texttt{CachedThreadPool} to handle each incoming connection in a separate thread (\texttt{handleClient()}).
         \begin{itemize}
-            \item As a \textbf{Leader}, it processes \texttt{LOCK}/\texttt{UNLOCK} requests, enforces the business rules, modifies its local \texttt{lockMap}, and calls \texttt{notifyFollowers()} to propagate the change.
-            \item As a \textbf{Follower}, it forwards \texttt{LOCK}/\texttt{UNLOCK} requests to the hard-coded leader address. It handles \texttt{OWN} requests directly by reading its local \texttt{lockMap}. It also contains the \texttt{processSync()} method to apply updates sent by the leader.
+            \item \texttt{handleClientRequest()}: Parses client messages (\texttt{LOCK}, \texttt{UNLOCK}, \texttt{OWN}) and routes them to \texttt{processRequest()}.
+            \item \texttt{processRequest()}: This \texttt{synchronized} method is the main logic gate.
+                \begin{itemize}
+                    \item If \textbf{isLeader}, it calls \texttt{handleLeaderRequest()} to enforce business rules, update the local \texttt{lockMap}, and trigger replication via \texttt{notifyFollowers()}.
+                    \item If \textbf{isFollower}, it calls \texttt{handleFollowerRequest()}.
+                \end{itemize}
+            \item \texttt{handleFollowerRequest()}:
+                \begin{itemize}
+                    \item For \texttt{OWN}, it reads its local \texttt{lockMap} and returns the value (fast, local read).
+                    \item For \texttt{LOCK}/\texttt{UNLOCK}, it forwards the request to the leader via \texttt{forwardToLeader()} and returns the leader's response.
+                \end{itemize}
+            \item \texttt{notifyFollowers()}: The leader iterates through its list of followers, submitting a new task to the thread pool for each one to send a \texttt{SYNC} message in parallel and wait for an \texttt{ACK}.
+            \item \texttt{handleSyncMessage()}: Triggered when a message starts with \texttt{SYNC,}. This is how a follower receives updates. It calls \texttt{processSync()} to apply the change to its local \texttt{lockMap} and sends back an \texttt{ACK}.
         \end{itemize}
-    \item \textbf{\texttt{Client.java}}: This class provides the client-facing API: \texttt{tryLock}, \texttt{tryUnLock}, and \texttt{ownTheLock}. Each operation opens a new socket, sends its request message, and reads the single-line response from the server.
-    \item \textbf{\texttt{DistributedLockTest.java}}: A test suite that uses a thread pool to simulate concurrent clients. These clients connect to different servers in the cluster (the leader at 10.0.2.3, and followers at 10.0.2.4 / 10.0.2.5) to verify concurrent lock acquisition, owner-reading, and lock release.
 \end{itemize}
 
-\subsection*{Business Rules}
-The leader enforces the following rules for all write operations:
+\subsection*{Business Rules (Enforced by Leader)}
 \begin{itemize}
     \item \textbf{Preemption (LOCK)}: Success if the lock (key) does not exist in the \texttt{lockMap}. Failure otherwise.
     \item \textbf{Release (UNLOCK)}: Success if the lock (key) exists *and* the caller's \texttt{clientId} matches the one stored in the map. Failure otherwise.
     \item \textbf{Read (OWN)}: Any client can query the owner. The request is handled by any server and returns the owner's \texttt{clientId} or \texttt{NONE} if the lock does not exist.
 \end{itemize}
 
-\section{Protocol and Messages}
+\section{Communication Protocol and Error Handling}
 The system uses a simple, text-based, comma-delimited protocol.
 
-\begin{center}
-\begin{tabular}{|l|l|l|}
-\hline
-\textbf{Type} & \textbf{Format} & \textbf{Description}\\\hline
-Client $\rightarrow$ Server & \texttt{LOCK,\$name,\$client} & Lock acquisition request\\\hline
-Client $\rightarrow$ Server & \texttt{UNLOCK,\$name,\$client} & Lock release request\\\hline
-Client $\rightarrow$ Server & \texttt{OWN,\$name,\$client} & Read owner request\\\hline
-Leader $\rightarrow$ Followers & \texttt{SYNC,\$cmd,\$name,\$client} & State replication (e.g., SYNC,LOCK,...) \\\hline
-Followers $\rightarrow$ Leader & \texttt{ACK} & Acknowledgment of SYNC\\\hline
-Followers $\rightarrow$ Leader & \texttt{REGISTER,\$ip:\$port} & Follower registration on startup\\\hline
+\subsection*{Client-Server Messages}
+\begin{table}[htbp]
+\centering
+\caption{Client-Server and Inter-Server Protocol}
+\label{tab:protocol}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Type} & \textbf{Format} & \textbf{Description} \\
+\midrule
+Client $\rightarrow$ Server & \texttt{LOCK,\$name,\$client} & Lock acquisition request \\
+Client $\rightarrow$ Server & \texttt{UNLOCK,\$name,\$client} & Lock release request \\
+Client $\rightarrow$ Server & \texttt{OWN,\$name,\$client} & Read owner request \\
+Leader $\rightarrow$ Followers & \texttt{SYNC,\$cmd,\$name,\$client} & State replication (e.g., SYNC,LOCK,...) \\
+Followers $\rightarrow$ Leader & \texttt{ACK} & Acknowledgment of SYNC \\
+Followers $\rightarrow$ Leader & \texttt{REGISTER,\$ip:\$port} & Follower registration on startup \\
+\bottomrule
 \end{tabular}
-\end{center}
+\end{table}
 
-Server responses to the client are simple strings: \texttt{SUCCESS}, \texttt{FAIL}, \texttt{NONE}, \texttt{ERROR}, or \texttt{TIMEOUT}.
+\subsection*{Server Responses and Error Handling}
+Server responses to the client are simple, single-word strings, as shown in Table \ref{tab:responses}. This provides basic robustness. Timeouts are implemented on socket operations (e.g., 10s for forwarding to leader, 5s for SYNC) to prevent threads from hanging indefinitely on network issues.
+
+\begin{table}[htbp]
+\centering
+\caption{Server Response Codes}
+\label{tab:responses}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Response Code} & \textbf{Meaning} \\
+\midrule
+\texttt{SUCCESS} & Operation (LOCK/UNLOCK) succeeded. \\
+\texttt{FAIL} & Operation (LOCK/UNLOCK) failed (e.g., lock taken, not owner). \\
+\texttt{NONE} & \texttt{OWN} request returned no owner for the lock. \\
+\texttt{<ClientID>} & \texttt{OWN} request returned the current lock owner. \\
+\texttt{ERROR} & A generic connection or processing error occurred. \\
+\texttt{TIMEOUT} & A network operation (e.g., forwarding) timed out. \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \section{Experimental Results}
 The following figures illustrate the system in operation, using three virtual machines as specified in the \texttt{README.md}.
