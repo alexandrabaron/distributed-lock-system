@@ -2,7 +2,7 @@
 
 A distributed consensus system implementing a distributed lock mechanism with one leader server and multiple follower servers, ensuring data consistency through replication.
 
-## 📋 Table of Contents
+## Table of Contents
 
 - [Overview](#overview)
 - [Architecture](#architecture)
@@ -15,7 +15,7 @@ A distributed consensus system implementing a distributed lock mechanism with on
 - [Communication Protocol](#communication-protocol)
 - [Troubleshooting](#troubleshooting)
 
-## 🎯 Overview
+## Overview
 
 This project implements a distributed consensus system that allows multiple clients to manage distributed locks in a consistent manner. The system ensures that only one client can own a lock at a time, even in a distributed environment.
 
@@ -28,7 +28,7 @@ This project implements a distributed consensus system that allows multiple clie
 - ✅ **Real-time monitoring** of server status
 - ✅ **Socket communication** for network connectivity
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
@@ -51,7 +51,7 @@ This project implements a distributed consensus system that allows multiple clie
 - **Follower Servers**: Replicate the leader's map and can respond to read requests
 - **Clients**: Connect to any server to perform operations
 
-## 🚀 Features
+## Features
 
 ### Supported Operations
 
@@ -67,7 +67,7 @@ This project implements a distributed consensus system that allows multiple clie
 - **UNLOCK**: Success if client owns the lock, failure otherwise
 - **OWN**: Returns the owner client ID or "NONE"
 
-## 📦 Installation
+## Installation
 
 ### Prerequisites
 
@@ -120,11 +120,11 @@ static {
 }
 ```
 
-## 🎮 Usage
+## Usage
 
 ### Starting Servers
 
-**⚠️ Important: Start in the following order**
+**Important: Start in the following order**
 
 1. **Start the Leader** (VM 10.0.2.3)
    ```bash
@@ -157,7 +157,7 @@ java Client 10.0.2.3 5000 Client1
 java Client 10.0.2.4 5000 Client2
 ```
 
-## 🧪 Testing
+## Testing
 
 ### Automated Test
 
@@ -194,7 +194,7 @@ Client Client1 - Owner of lock1: NONE
 === End of Test Sequence ===
 ```
 
-## 🔧 Technical Architecture
+## Technical Architecture
 
 ### Data Flow
 
@@ -227,7 +227,7 @@ sequenceDiagram
 - **Thread Safety**: Synchronization with `synchronized` on critical operations
 - **Timeout**: Timeout handling to prevent deadlocks
 
-## 📡 Communication Protocol
+## Communication Protocol
 
 ### Client-Server Messages
 
@@ -255,7 +255,7 @@ sequenceDiagram
 | `ERROR` | System error |
 | `TIMEOUT` | Network timeout |
 
-## 🚨 Troubleshooting
+## Troubleshooting
 
 ### Common Issues
 
@@ -283,27 +283,13 @@ tail -f server.log
 ### Logs and Monitoring
 
 The system displays detailed logs with:
-- 🔗 Incoming connections
-- 📨 Messages received/sent
-- 🔄 Synchronization operations
-- ⚠️ Errors and timeouts
-- 📊 Server status
+- Incoming connections
+- Messages received/sent
+- Synchronization operations
+- Errors and timeouts
+- Server status
 
-## 📊 Performance
-
-### Metrics
-
-- **Latency**: ~10-50ms for local operations
-- **Throughput**: ~100-500 operations/second
-- **Consistency**: 100% (strong consistency guaranteed)
-
-### Optimizations
-
-- **Thread Pool**: Efficient connection management
-- **Timeout**: Prevents deadlocks
-- **Asynchronous logs**: No performance impact
-
-## 🔒 Security
+## Security
 
 ### Considerations
 
@@ -311,23 +297,21 @@ The system displays detailed logs with:
 - **Encryption**: Clear communication (TLS possible)
 - **Authorization**: Basic access control by client ID
 
-### Recommendations
-
-- Use TLS for communication
-- Implement client authentication
-- Add audit logs
-
-## 👥 Authors
+## Authors
 
 - **Alexandra Baron**
 - **Maria Stivala**
 - **Mathis Liens**
-- **Arnaud**
+- **Arnaud Brisset**
 - **Charles**
 - **Baptiste Halçaren**
 
 ---
 
 **🎉 Thank you for using our distributed lock system!**
+
+
+
+
 
 
