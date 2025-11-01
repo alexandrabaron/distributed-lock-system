@@ -59,9 +59,9 @@ We opted for a \textbf{leader-follower architecture} built on Java TCP sockets. 
 
     \item \textbf{Request Routing}: Followers act as simple routers for write operations, forwarding \texttt{LOCK}/\texttt{UNLOCK} requests to the leader. This design decision is central to ensuring consistency, as it establishes the leader as the single point of truth (or "single-writer") for all state changes, preventing split-brain scenarios.
 
-    \item \textbf{Synchronous Replication}: The leader uses a synchronous \texttt{SYNC}/\texttt{ACK} model for replication. When the leader approves a \texttt{LOCK} or \texttt{UNLOCK} operation, it sends a \texttt{SYNC} message to all followers. It (conceptually) waits for an \texttt{ACK} from each follower before confirming success to the client.
+    \item \textbf{Asynchronous Replication}: The leader uses an asynchronous \texttt{SYNC}/\texttt{ACK} model for replication. When the leader approves a \texttt{LOCK} or \texttt{UNLOCK} operation, it immediately updates its local map and sends a \texttt{SYNC} message to all followers in parallel (using a thread pool). The leader returns \texttt{SUCCESS} to the client \textbf{without waiting} for follower acknowledgments, prioritizing low latency. Followers receive and process the \texttt{SYNC} messages asynchronously, sending \texttt{ACK} responses that the leader logs but does not await.
     
-    \item \textbf{Reasoning (Consistency)}: This synchronous approach provides strong consistency. When a client receives a \texttt{SUCCESS} response, it has a guarantee that the state change has been accepted by the leader *and* replicated to its followers. The alternative, asynchronous replication, would be faster for the client but would create a window where a client could read stale data from a follower.
+    \item \textbf{Reasoning (Consistency)}: This asynchronous approach provides eventual consistency rather than strong consistency. When a client receives a \texttt{SUCCESS} response, it has a guarantee that the state change has been accepted by the leader, but the replication to followers happens asynchronously. This creates a small window where a follower might serve stale data for an \texttt{OWN} request immediately after a successful \texttt{LOCK} or \texttt{UNLOCK}. This trade-off was chosen to reduce latency for write operations, and in practice, the replication typically completes quickly (within milliseconds) due to the local network setup. A synchronous approach would provide stronger consistency guarantees but at the cost of higher latency and reduced throughput.
 
     \item \textbf{Simple Error Handling}: The system relies on socket timeouts (5-10s) and explicit response codes (\texttt{SUCCESS}/\texttt{FAIL}/\texttt{NONE}/\texttt{ERROR}/\texttt{TIMEOUT}). This provides basic robustness against network delays or unresponsive servers without implementing a complex failure-detection and leader-election protocol, which was deemed outside the project's scope.
 \end{itemize}
@@ -70,8 +70,9 @@ We opted for a \textbf{leader-follower architecture} built on Java TCP sockets. 
 The system's functional architecture is centralized around the leader, which serializes all state changes. The interactions are as follows:
 
 \begin{enumerate}
-    \item \textbf{Write Operation (LOCK/UNLOCK)}: Client $\rightarrow$ Follower $\rightarrow$ Leader $\rightarrow$ All Followers (SYNC/ACK) $\rightarrow$ Leader $\rightarrow$ Follower $\rightarrow$ Client. If the client contacts the leader directly, the follower forwarding steps are skipped.
-    \item \textbf{Read Operation (OWN)}: Client $\rightarrow$ (Any) Server $\rightarrow$ Client. This operation is handled locally by whichever server receives it to ensure low latency.
+    \item \textbf{Write Operation (LOCK/UNLOCK)}: Client $\rightarrow$ Follower $\rightarrow$ Leader $\rightarrow$ [Leader updates map and returns SUCCESS immediately] $\parallel$ [Leader sends SYNC to all followers asynchronously] $\rightarrow$ Followers $\rightarrow$ ACK. If the client contacts the leader directly, the follower forwarding steps are skipped. Note that when a follower forwards a request, it receives the leader's response, updates its local map immediately, and later receives a \texttt{SYNC} message from the leader (which results in a redundant update that is idempotent).
+    \item \textbf{Read Operation (OWN)}: Client $\rightarrow$ (Any) Server $\rightarrow$ Client. This operation is handled locally by whichever server receives it to ensure low latency. Due to asynchronous replication, a follower might return slightly stale data immediately after a write operation.
+    \item \textbf{Follower Registration}: When a follower server starts, it sends a \texttt{REGISTER,\$ip:\$port} message to the leader. The leader adds the follower to its internal list and responds with \texttt{REGISTERED}. This allows the leader to know which followers to notify during replication.
 \end{enumerate}
 
 This flow is illustrated in Figure \ref{fig:mermaid}, which shows the sequence of network calls for both a write (\texttt{LOCK}) and a read (\texttt{OWN}) operation.
@@ -103,10 +104,10 @@ The project consists of three main Java classes:
             \item \texttt{handleFollowerRequest()}:
                 \begin{itemize}
                     \item For \texttt{OWN}, it reads its local \texttt{lockMap} and returns the value (fast, local read).
-                    \item For \texttt{LOCK}/\texttt{UNLOCK}, it forwards the request to the leader via \texttt{forwardToLeader()} and returns the leader's response.
+                    \item For \texttt{LOCK}/\texttt{UNLOCK}, it forwards the request to the leader via \texttt{forwardToLeader()}. If the leader returns \texttt{SUCCESS}, the follower immediately updates its local \texttt{lockMap} to reduce latency for subsequent reads. The follower then returns the leader's response to the client. Note that this creates a redundant update scenario: the follower will update its map again when it receives the \texttt{SYNC} message from the leader (which is sent to all followers, including the one that forwarded the request). This redundancy is idempotent and helps ensure consistency.
                 \end{itemize}
-            \item \texttt{notifyFollowers()}: The leader iterates through its list of followers, submitting a new task to the thread pool for each one to send a \texttt{SYNC} message in parallel and wait for an \texttt{ACK}.
-            \item \texttt{handleSyncMessage()}: Triggered when a message starts with \texttt{SYNC,}. This is how a follower receives updates. It calls \texttt{processSync()} to apply the change to its local \texttt{lockMap} and sends back an \texttt{ACK}.
+            \item \texttt{notifyFollowers()}: The leader iterates through its list of followers, submitting a new task to the thread pool for each one to send a \texttt{SYNC} message in parallel. Each task waits for an \texttt{ACK} from its assigned follower, but the leader does not block the main request handling thread waiting for these acknowledgments. This enables asynchronous replication.
+            \item \texttt{handleSyncMessage()}: Triggered when a message starts with \texttt{SYNC,}. This is how a follower receives updates from the leader. It calls \texttt{processSync()} to apply the change to its local \texttt{lockMap} and sends back an \texttt{ACK}. Note that when a follower forwards a request to the leader, it may update its local map immediately upon receiving \texttt{SUCCESS}, and then receive a \texttt{SYNC} message causing a second (idempotent) update.
         \end{itemize}
 \end{itemize}
 
@@ -135,6 +136,8 @@ Client $\rightarrow$ Server & \texttt{OWN,\$name,\$client} & Read owner request 
 Leader $\rightarrow$ Followers & \texttt{SYNC,\$cmd,\$name,\$client} & State replication (e.g., SYNC,LOCK,...) \\
 Followers $\rightarrow$ Leader & \texttt{ACK} & Acknowledgment of SYNC \\
 Followers $\rightarrow$ Leader & \texttt{REGISTER,\$ip:\$port} & Follower registration on startup \\
+Leader $\rightarrow$ Follower & \texttt{REGISTERED} & Confirmation of successful registration \\
+Leader $\rightarrow$ Follower & \texttt{NOT\_LEADER} & Response when non-leader receives REGISTER \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -156,9 +159,13 @@ Server responses to the client are simple, single-word strings, as shown in Tabl
 \texttt{<ClientID>} & \texttt{OWN} request returned the current lock owner. \\
 \texttt{ERROR} & A generic connection or processing error occurred. \\
 \texttt{TIMEOUT} & A network operation (e.g., forwarding) timed out. \\
+\texttt{INVALID\_FORMAT} & Message format is invalid (not enough parts). \\
+\texttt{INVALID\_COMMAND} & Command type is not recognized (not LOCK/UNLOCK/OWN). \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+\textbf{Note}: Additional inter-server response codes include \texttt{REGISTERED} and \texttt{NOT\_LEADER}, used during follower registration with the leader.
 
 \section{Experimental Results}
 The following figures illustrate the system in operation, using three virtual machines as specified in the \texttt{README.md}.
@@ -184,8 +191,8 @@ The following figures illustrate the system in operation, using three virtual ma
 \subsection*{Observations}
 \begin{itemize}
     \item The test results (Figure 2) show that for a single lock, only one client's \texttt{LOCK} request succeeds, while concurrent attempts from other clients correctly fail (returning \texttt{FAIL}).
-    \item \texttt{OWN} requests, even when sent to followers, correctly return the ID of the lock owner or \texttt{NONE} after the lock is released.
-    \item This confirms that the \texttt{SYNC} replication mechanism successfully maintains a consistent state map across the leader and all followers.
+    \item \texttt{OWN} requests, even when sent to followers, correctly return the ID of the lock owner or \texttt{NONE} after the lock is released. Due to asynchronous replication, there may be a very brief window (typically milliseconds) where a follower returns slightly stale data immediately after a write operation, but in practice this is rarely observed in the test environment.
+    \item The \texttt{SYNC} replication mechanism successfully maintains eventual consistency across the leader and all followers. The asynchronous nature of replication ensures low latency for write operations while still achieving consistency in normal operation.
 \end{itemize}
 
 \section{Limitations and Future Work}
@@ -198,7 +205,7 @@ While functional, this implementation has several limitations that could be addr
 \end{itemize}
 
 \section{Conclusion}
-We have successfully implemented a distributed lock system that fulfills the core requirements of the project. It uses a leader-follower architecture with a simple Java socket protocol to manage \texttt{LOCK}, \texttt{UNLOCK}, and \texttt{OWN} operations. The system ensures strong consistency by routing all write operations through the leader and using synchronous replication to update followers. Tests demonstrate the system's correctness in handling concurrent requests and maintaining a consistent state. This project serves as a solid foundation for understanding consensus and could be extended to include more advanced features like dynamic configuration and leader election.
+We have successfully implemented a distributed lock system that fulfills the core requirements of the project. It uses a leader-follower architecture with a simple Java socket protocol to manage \texttt{LOCK}, \texttt{UNLOCK}, and \texttt{OWN} operations. The system ensures consistency by routing all write operations through the leader and using asynchronous replication to update followers, providing eventual consistency with low latency for write operations. Tests demonstrate the system's correctness in handling concurrent requests and maintaining a consistent state across all servers in normal operation. This project serves as a solid foundation for understanding consensus and distributed systems, and could be extended to include more advanced features like synchronous replication for stronger consistency guarantees, dynamic configuration, and leader election for fault tolerance.
 
 \section{Appendix}
 
