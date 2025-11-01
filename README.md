@@ -21,8 +21,9 @@ This project implements a distributed consensus system that allows multiple clie
 
 ### Key Features
 
-- **Leader-Follower Architecture** with automatic replication
-- **Strong consistency** of data across all servers
+- **Leader-Follower Architecture** with synchronous replication (CountDownLatch-based ACK waiting)
+- **Strong consistency** of data across all servers through synchronous replication
+- **Pending request mechanism**: Followers keep client connections open until replication completes, ensuring clients only receive confirmation after data is replicated
 - **Robust synchronization protocol** with ACK and timeouts
 - **Advanced error handling** with detailed logging
 - **Real-time monitoring** of server status
@@ -47,9 +48,9 @@ This project implements a distributed consensus system that allows multiple clie
 
 ### Components
 
-- **Leader Server**: Manages all lock operations and synchronizes with followers
-- **Follower Servers**: Replicate the leader's map and can respond to read requests
-- **Clients**: Connect to any server to perform operations
+- **Leader Server**: Manages all lock operations, validates requests, and uses synchronous replication (waiting for ACK from all followers) to ensure strong consistency
+- **Follower Servers**: Replicate the leader's map via SYNC messages. Followers implement a pending request mechanism: when a client sends LOCK/UNLOCK, the follower marks it as pending, forwards to the leader, and responds to the client only after receiving the SYNC message. Read requests (OWN) are handled locally for low latency.
+- **Clients**: Connect to any server to perform operations. Clients connecting to followers benefit from the pending mechanism ensuring they receive confirmation only after replication is complete.
 
 ## Features
 
@@ -246,9 +247,10 @@ sequenceDiagram
 
 ### Thread Management
 
-- **Thread Pool**: Uses `ExecutorService` to manage connections
-- **Thread Safety**: Synchronization with `synchronized` on critical operations
-- **Timeout**: Timeout handling to prevent deadlocks
+- **Thread Pool**: Uses `ExecutorService` with `CachedThreadPool` to manage all connections (clients and inter-server communication)
+- **Thread Safety**: Synchronization with `synchronized` on critical operations, `ConcurrentHashMap` for pending requests
+- **Synchronous Replication**: Leader uses `CountDownLatch` to wait for ACK from all followers before proceeding
+- **Timeout**: Timeout handling to prevent deadlocks (5s per follower, 10s overall for replication)
 
 ## Communication Protocol
 
@@ -277,6 +279,10 @@ sequenceDiagram
 | `NONE` | No owner |
 | `ERROR` | System error |
 | `TIMEOUT` | Network timeout |
+| `INVALID_FORMAT` | Invalid message format |
+| `INVALID_COMMAND` | Unknown command |
+| `REGISTERED` | Follower successfully registered |
+| `NOT_LEADER` | Request sent to non-leader (only for registration) |
 
 ## Troubleshooting
 

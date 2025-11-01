@@ -702,23 +702,33 @@ public String ownTheLock(String lockName, String lockKey) {
 public void testLockSequence(String lockName) {
     System.out.println("\n=== Testing Lock Sequence for " + lockName + " ===");
     
-    // Check initial owner
-    ownTheLock(lockName, "");
-    
-    // Try to acquire lock
-    tryLock(lockName, "");
-    
-    // Check owner after acquisition
-    ownTheLock(lockName, "");
-    
-    // Try to acquire same lock again (should fail)
-    tryLock(lockName, "");
-    
-    // Release lock
-    tryUnLock(lockName, "");
-    
-    // Check owner after release
-    ownTheLock(lockName, "");
+    try {
+        // Check initial owner
+        ownTheLock(lockName, "");
+        Thread.sleep(500); // Delay to allow observation
+        
+        // Try to acquire lock
+        tryLock(lockName, "");
+        Thread.sleep(500); // Delay to allow observation
+        
+        // Check owner after acquisition
+        ownTheLock(lockName, "");
+        Thread.sleep(500); // Delay to allow observation
+        
+        // Try to acquire same lock again (should fail)
+        tryLock(lockName, "");
+        Thread.sleep(500); // Delay to allow observation
+        
+        // Release lock
+        tryUnLock(lockName, "");
+        Thread.sleep(500); // Delay to allow observation
+        
+        // Check owner after release
+        ownTheLock(lockName, "");
+        
+    } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+    }
     
     System.out.println("=== End of Test Sequence ===\n");
 }
@@ -731,6 +741,8 @@ public void testLockSequence(String lockName) {
 4. **Duplicate attempt**: Try to acquire again (should fail)
 5. **Release**: Release the lock
 6. **Final check**: Verify no owner
+
+**Delays**: 500ms delays between operations allow better observation of concurrent behavior when multiple clients are running simultaneously.
 
 ### Main Method
 
@@ -754,8 +766,14 @@ public static void main(String[] args) {
     
     // Test concurrent access simulation
     System.out.println("Testing concurrent access simulation...");
-    client.tryLock("sharedLock", "");
-    client.ownTheLock("sharedLock", "");
+    try {
+        client.tryLock("sharedLock", "");
+        Thread.sleep(500);
+        client.ownTheLock("sharedLock", "");
+        Thread.sleep(2000); // Longer delay before finishing to allow other clients to compete
+    } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+    }
 }
 ```
 
@@ -764,6 +782,7 @@ public static void main(String[] args) {
 **Test Execution**:
 - Tests multiple lock sequences
 - Simulates concurrent access
+- Includes delays (500ms between operations, 2s at the end) to allow observation of concurrent behavior
 
 ## DistributedLockTest.java - Complete Analysis
 
@@ -924,12 +943,13 @@ private ExecutorService threadPool = Executors.newCachedThreadPool();
 
 **Type**: Cached thread pool
 
-**Usage**: Handles incoming connections
+**Usage**: Handles all connections (both client connections and inter-server communication for SYNC messages)
 
 **Benefits**: 
 - Automatic thread management
 - Efficient resource utilization
 - Scalable to connection load
+- One pool handles all types of concurrent operations
 
 ### Synchronization
 
@@ -1001,6 +1021,10 @@ if (parts.length < 3) {
 | `NONE` | No owner | OWN query result |
 | `ERROR` | System error | Connection/processing error |
 | `TIMEOUT` | Network timeout | Communication timeout |
+| `INVALID_FORMAT` | Invalid message format | Message parsing failure |
+| `INVALID_COMMAND` | Unknown command | Unsupported command |
+| `REGISTERED` | Follower successfully registered | Registration success |
+| `NOT_LEADER` | Request sent to non-leader | Registration to follower |
 | `ACK` | Acknowledgment | Synchronization confirmation |
 
 ### Timeout Values
