@@ -21,13 +21,17 @@
 \usepackage{booktabs} % For professional tables (\toprule, \midrule, \bottomrule)
 \usepackage{array} % For table column formatting
 
+% Package for diagrams
+\usepackage{tikz}
+\usetikzlibrary{shapes,arrows,positioning}
+
 % Graphics path (images folder is at repo root, one level up from 'rapport')
 \graphicspath{{../images/}}
 
 % Title
 \title{Simple Consensus System for Distributed Locks\\
 \large ICT3 Project n°2 — Shanghai Jiao Tong University}
-\author{Alexandra Baron \and Maria Stivala \and Mathis Liens \and Arnaud Brisset \and Charles Pelong\and Baptiste Halçaren}
+\author{Alexandra Baron \and Charles Pelong \and Maria Stivala \and Arnaud Brisset \and Baptiste Halçaren \and Mathis Liens}
 \date{October 2025}
 
 \begin{document}
@@ -37,7 +41,7 @@
 % University logo - Placed AFTER title and smaller
 \begin{figure}[htbp]
 \centering
-\includegraphics[width=0.4\linewidth]{shanghai-jiao-tong-university.png}
+\includegraphics[width=0.6\linewidth]{shanghai-jiao-tong-university.png}
 \end{figure}
 
 \begin{abstract}
@@ -86,11 +90,12 @@ This flow is illustrated in Figure \ref{fig:mermaid}, which shows the sequence o
 % Note: This figure requires you to export your Mermaid diagram to "images/mermaid-flow.png"
 \begin{figure}[htbp]
     \centering
-    \includegraphics[width=0.85\linewidth]{images/mermaid.JPG}
+    \includegraphics[width=0.85\linewidth]{images/capture_architecture_from_readme.JPG}
     \caption{Sequence diagram of system operations (LOCK and OWN).}
     \label{fig:mermaid}
 \end{figure}
 
+\newpage
 \section{Structure of the Code}
 The project consists of three main Java classes:
 
@@ -186,25 +191,55 @@ The following figures illustrate the system in operation, using three virtual ma
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.9\linewidth]{images/Capture_connection des 3 serveurs.JPG}
+\includegraphics[width=1\linewidth]{images/Capture_connection des 3 serveurs .JPG}
 \caption{Initialization of the leader (10.0.2.3) and the two followers (10.0.2.4, 10.0.2.5).}
 \end{figure}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.9\linewidth]{images/Capture_distributed_lock_test.JPG}
-\caption{Execution of \texttt{DistributedLockTest}: concurrent acquisitions, reads, and releases.}
+\begin{tikzpicture}[
+    node distance=1.5cm and 2cm,
+    server/.style={rectangle, draw, thick, minimum width=2.5cm, minimum height=1.2cm, align=center},
+    client/.style={rectangle, draw, thick, rounded corners=3pt, minimum width=2cm, minimum height=1cm, align=center, fill=gray!20},
+    connection/.style={->, >=stealth, thick}
+]
+
+% Servers
+\node[server] (leader) at (0,4) {\textbf{Leader}\\10.0.2.3:5000};
+\node[server] (follower1) at (-3,2) {\textbf{Follower 1}\\10.0.2.4:5000};
+\node[server] (follower2) at (3,2) {\textbf{Follower 2}\\10.0.2.5:5000};
+
+% Clients (Client1 et Client2 échangés)
+\node[client] (client2) at (-3,0) {\textbf{Client2}\\connects to\\Follower 1};
+\node[client] (client1) at (0,0) {\textbf{Client1}\\connects to\\Leader};
+\node[client] (client3) at (3,0) {\textbf{Client3}\\connects to\\Follower 2};
+
+% Client to Server connections
+\draw[connection] (client1) -- (leader);
+\draw[connection] (client2) -- (follower1);
+\draw[connection] (client3) -- (follower2);
+
+% Inter-server connections (SYNC/ACK) - flèches double sens
+% Leader <-> Follower 1
+\draw[connection, dashed, <->] (leader) -- node[midway, above, sloped, font=\small] {SYNC} node[midway, below, sloped, font=\small] {ACK} (follower1);
+% Leader <-> Follower 2
+\draw[connection, dashed, <->] (leader) -- node[midway, above, sloped, font=\small] {SYNC} node[midway, below, sloped, font=\small] {ACK} (follower2);
+
+\end{tikzpicture}
+\caption{Test architecture for \texttt{DistributedLockTest}: three clients connect to different servers (Client1 to the leader, Client2 and Client3 to the followers) to test concurrent lock operations and replication.}
+\label{fig:test_architecture}
 \end{figure}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.9\linewidth]{images/Capture_ connection de deux clients.JPG}
-\caption{Concurrent connection of two clients to two different servers (a follower and the leader).}
+\includegraphics[width=1\linewidth]{images/Capture_distributed_lock_test.JPG}
+\caption{Execution of \texttt{DistributedLockTest}: concurrent acquisitions, reads, and releases. The test architecture is shown in Figure \ref{fig:test_architecture}.}
 \end{figure}
+
 
 \subsection*{Observations}
 \begin{itemize}
-    \item The test results (Figure 2) show that for a single lock, only one client's \texttt{LOCK} request succeeds, while concurrent attempts from other clients correctly fail (returning \texttt{FAIL}).
+    \item The test results show that for a single lock, only one client's \texttt{LOCK} request succeeds, while concurrent attempts from other clients correctly fail (returning \texttt{FAIL}). The architecture shown in Figure \ref{fig:test_architecture} demonstrates how the three clients connect to different servers in the cluster.
     \item \texttt{OWN} requests, even when sent to followers, correctly return the ID of the lock owner or \texttt{NONE} after the lock is released. Due to the synchronous replication mechanism, followers should always have the most up-to-date data, ensuring strong consistency across all servers.
     \item The \texttt{SYNC} replication mechanism successfully maintains strong consistency across the leader and all followers. The synchronous replication (with ACK confirmation) ensures that all state changes are replicated to all followers before any client receives confirmation, guaranteeing a consistent view across the entire cluster.
 \end{itemize}
@@ -220,8 +255,6 @@ While functional, this implementation has several limitations that could be addr
 \end{itemize}
 
 \section{Conclusion}
-We have successfully implemented a distributed lock system that fulfills the core requirements of the project. It uses a leader-follower architecture with a simple Java socket protocol to manage \texttt{LOCK}, \texttt{UNLOCK}, and \texttt{OWN} operations. The system ensures strong consistency by routing all write operations through the leader and using synchronous replication (with pending request mechanism) to update followers. The leader waits for acknowledgments from all followers before confirming successful operations, ensuring that all servers maintain a consistent view of the lock state. The pending request mechanism further strengthens consistency by ensuring that clients receive confirmation only after their request has been replicated to the follower that processed it. Tests demonstrate the system's correctness in handling concurrent requests and maintaining a consistent state across all servers. This project serves as a solid foundation for understanding consensus and distributed systems, and could be extended to include more advanced features like dynamic configuration, leader election for fault tolerance, and improved error recovery mechanisms.
-
-\section{Appendix}
+We have successfully implemented a distributed lock system that fulfills the core requirements of the project. It uses a leader-follower architecture with a simple Java socket protocol to manage \texttt{LOCK}, \texttt{UNLOCK}, and \texttt{OWN} operations. The system ensures strong consistency by routing all write operations through the leader and using synchronous replication (with pending request mechanism) to update followers. The leader waits for acknowledgments from all followers before confirming successful operations, ensuring that all servers maintain a consistent view of the lock state. The pending request mechanism further strengthens consistency by ensuring that clients receive confirmation only after their request has been replicated to the follower that processed it. Tests demonstrate the system's correctness in handling concurrent requests and maintaining a consistent state across all servers. This project serves as a solid foundation for understanding consensus and distributed system.
 
 \end{document}
