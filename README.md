@@ -205,7 +205,7 @@ sequenceDiagram
     participant L as Leader
     participant F2 as Other Followers
 
-    Note over C,F: Scenario 1: LOCK/UNLOCK Operation (with pending mechanism & synchronous replication)
+    Note over C,F: Scenario 1: LOCK/UNLOCK Operation 
     C->>F: LOCK/UNLOCK request
     F->>F: Mark request as pending (keep connection open)
     F->>L: Forward request
@@ -224,7 +224,7 @@ sequenceDiagram
         F->>C: FAIL response (close connection)
     end
 
-    Note over C,F: Scenario 2: OWN Operation (Direct)
+    Note over C,F: Scenario 2: OWN Operation
     C->>F: OWN request
     F->>F: Check local map directly
     F->>C: Return owner info
