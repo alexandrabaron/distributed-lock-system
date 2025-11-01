@@ -48,25 +48,25 @@ public class Server {
         try {
             serverSocket = new ServerSocket(port);
             System.out.println("==========================================");
-            System.out.println("🚀 Server started successfully!");
-            System.out.println("📍 Address: " + serverIp + ":" + port);
-            System.out.println("👑 Role: " + (isLeader ? "LEADER" : "FOLLOWER"));
-            System.out.println("📊 Followers configured: " + followerServers.size());
+            System.out.println("Server started successfully!");
+            System.out.println("Address: " + serverIp + ":" + port);
+            System.out.println("Role: " + (isLeader ? "LEADER" : "FOLLOWER"));
+            System.out.println("Followers configured: " + followerServers.size());
             System.out.println("==========================================");
 
             while (true) {
                 try {
                     Socket clientSocket = serverSocket.accept();
-                    System.out.println("🔗 New connection from: " + clientSocket.getRemoteSocketAddress());
+                    System.out.println("New connection from: " + clientSocket.getRemoteSocketAddress());
                     threadPool.submit(() -> handleClient(clientSocket));
                 } catch (IOException e) {
-                    System.err.println("❌ Error accepting connection: " + e.getMessage());
+                    System.err.println("Error accepting connection: " + e.getMessage());
                     // Continue listening for other connections
                 }
             }
         } catch (IOException e) {
-            System.err.println("❌ Failed to start server on " + serverIp + ":" + port);
-            System.err.println("💡 Make sure the port is not already in use");
+            System.err.println("Failed to start server on " + serverIp + ":" + port);
+            System.err.println("Make sure the port is not already in use");
             throw e;
         }
     }
@@ -483,16 +483,16 @@ public class Server {
                 
                 String response = in.readLine();
                 if ("REGISTERED".equals(response)) {
-                    System.out.println("✅ [" + serverIp + "] Successfully registered with leader");
+                    System.out.println("[" + serverIp + "] Successfully registered with leader");
                 } else {
-                    System.err.println("❌ [" + serverIp + "] Registration failed. Response: " + response);
+                    System.err.println("[" + serverIp + "] Registration failed. Response: " + response);
                 }
                 
             } catch (java.net.SocketTimeoutException e) {
-                System.err.println("⏰ [" + serverIp + "] Timeout while registering with leader: " + e.getMessage());
+                System.err.println("[" + serverIp + "] Timeout while registering with leader: " + e.getMessage());
             } catch (IOException e) {
-                System.err.println("❌ [" + serverIp + "] Error registering with leader: " + e.getMessage());
-                System.err.println("💡 Make sure the leader server is running on 10.0.2.3:5000");
+                System.err.println("[" + serverIp + "] Error registering with leader: " + e.getMessage());
+                System.err.println("Make sure the leader server is running on 10.0.2.3:5000");
             }
         } else {
             System.out.println("[" + serverIp + "] This is the leader server, no registration needed");
@@ -519,21 +519,21 @@ public class Server {
     }
 
     public void printStatus() {
-        System.out.println("\n📊 === SERVER STATUS ===");
-        System.out.println("📍 Server IP: " + serverIp);
-        System.out.println("🔌 Port: " + port);
-        System.out.println("👑 Role: " + (isLeader ? "LEADER" : "FOLLOWER"));
-        System.out.println("🔒 Active locks: " + lockMap.size());
-        System.out.println("👥 Registered followers: " + followerServers.size());
+        System.out.println("\n=== SERVER STATUS ===");
+        System.out.println("Server IP: " + serverIp);
+        System.out.println("Port: " + port);
+        System.out.println("Role: " + (isLeader ? "LEADER" : "FOLLOWER"));
+        System.out.println("Active locks: " + lockMap.size());
+        System.out.println("Registered followers: " + followerServers.size());
         
         if (!lockMap.isEmpty()) {
-            System.out.println("🔐 Current locks:");
+            System.out.println("Current locks:");
             lockMap.forEach((lockName, clientId) -> 
                 System.out.println("   - " + lockName + " -> " + clientId));
         }
         
         if (!followerServers.isEmpty()) {
-            System.out.println("👥 Followers:");
+            System.out.println("Followers:");
             followerServers.forEach(follower -> 
                 System.out.println("   - " + follower));
         }
@@ -565,7 +565,7 @@ public class Server {
         
         // Add shutdown hook to print final status
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            System.out.println("\n🛑 Server shutting down...");
+            System.out.println("\nServer shutting down...");
             server.printStatus();
         }));
         

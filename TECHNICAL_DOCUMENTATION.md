@@ -1,8 +1,8 @@
-# 📚 Technical Documentation - Distributed Lock System
+# Technical Documentation - Distributed Lock System
 
 This document provides a comprehensive technical analysis of the distributed lock system codebase, explaining every class, method, and concept in detail.
 
-## 📋 Table of Contents
+## Table of Contents
 
 - [Project Structure](#project-structure)
 - [Server.java - Complete Analysis](#serverjava---complete-analysis)
@@ -14,7 +14,7 @@ This document provides a comprehensive technical analysis of the distributed loc
 - [Error Handling](#error-handling)
 - [Protocol Details](#protocol-details)
 
-## 🏗️ Project Structure
+## Project Structure
 
 ```
 distributed-lock-project/
@@ -24,7 +24,7 @@ distributed-lock-project/
 └── README.md                # Project documentation
 ```
 
-## 🖥️ Server.java - Complete Analysis
+## Server.java - Complete Analysis
 
 ### Class Overview
 
@@ -89,25 +89,25 @@ public void start() throws IOException {
     try {
         serverSocket = new ServerSocket(port);
         System.out.println("==========================================");
-        System.out.println("🚀 Server started successfully!");
-        System.out.println("📍 Address: " + serverIp + ":" + port);
-        System.out.println("👑 Role: " + (isLeader ? "LEADER" : "FOLLOWER"));
-        System.out.println("📊 Followers configured: " + followerServers.size());
+        System.out.println("Server started successfully!");
+        System.out.println("Address: " + serverIp + ":" + port);
+        System.out.println("Role: " + (isLeader ? "LEADER" : "FOLLOWER"));
+        System.out.println("Followers configured: " + followerServers.size());
         System.out.println("==========================================");
 
         while (true) {
             try {
                 Socket clientSocket = serverSocket.accept();
-                System.out.println("🔗 New connection from: " + clientSocket.getRemoteSocketAddress());
+                System.out.println("New connection from: " + clientSocket.getRemoteSocketAddress());
                 threadPool.submit(() -> handleClient(clientSocket));
             } catch (IOException e) {
-                System.err.println("❌ Error accepting connection: " + e.getMessage());
+                System.err.println("Error accepting connection: " + e.getMessage());
                 // Continue listening for other connections
             }
         }
     } catch (IOException e) {
-        System.err.println("❌ Failed to start server on " + serverIp + ":" + port);
-        System.err.println("💡 Make sure the port is not already in use");
+        System.err.println("Failed to start server on " + serverIp + ":" + port);
+        System.err.println("Make sure the port is not already in use");
         throw e;
     }
 }
@@ -503,16 +503,16 @@ public void connectLeader(String info) {
             
             String response = in.readLine();
             if ("REGISTERED".equals(response)) {
-                System.out.println("✅ [" + serverIp + "] Successfully registered with leader");
+                System.out.println("[" + serverIp + "] Successfully registered with leader");
             } else {
-                System.err.println("❌ [" + serverIp + "] Registration failed. Response: " + response);
+                System.err.println("[" + serverIp + "] Registration failed. Response: " + response);
             }
             
         } catch (java.net.SocketTimeoutException e) {
-            System.err.println("⏰ [" + serverIp + "] Timeout while registering with leader: " + e.getMessage());
+            System.err.println("[" + serverIp + "] Timeout while registering with leader: " + e.getMessage());
         } catch (IOException e) {
-            System.err.println("❌ [" + serverIp + "] Error registering with leader: " + e.getMessage());
-            System.err.println("💡 Make sure the leader server is running on 10.0.2.3:5000");
+            System.err.println("[" + serverIp + "] Error registering with leader: " + e.getMessage());
+            System.err.println("Make sure the leader server is running on 10.0.2.3:5000");
         }
     } else {
         System.out.println("[" + serverIp + "] This is the leader server, no registration needed");
@@ -530,21 +530,21 @@ public void connectLeader(String info) {
 
 ```java
 public void printStatus() {
-    System.out.println("\n📊 === SERVER STATUS ===");
-    System.out.println("📍 Server IP: " + serverIp);
-    System.out.println("🔌 Port: " + port);
-    System.out.println("👑 Role: " + (isLeader ? "LEADER" : "FOLLOWER"));
-    System.out.println("🔒 Active locks: " + lockMap.size());
-    System.out.println("👥 Registered followers: " + followerServers.size());
+    System.out.println("\n=== SERVER STATUS ===");
+    System.out.println("Server IP: " + serverIp);
+    System.out.println("Port: " + port);
+    System.out.println("Role: " + (isLeader ? "LEADER" : "FOLLOWER"));
+    System.out.println("Active locks: " + lockMap.size());
+    System.out.println("Registered followers: " + followerServers.size());
     
     if (!lockMap.isEmpty()) {
-        System.out.println("🔐 Current locks:");
+        System.out.println("Current locks:");
         lockMap.forEach((lockName, clientId) -> 
             System.out.println("   - " + lockName + " -> " + clientId));
     }
     
     if (!followerServers.isEmpty()) {
-        System.out.println("👥 Followers:");
+        System.out.println("Followers:");
         followerServers.forEach(follower -> 
             System.out.println("   - " + follower));
     }
@@ -585,7 +585,7 @@ public static void main(String[] args) throws IOException {
     
     // Add shutdown hook to print final status
     Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-        System.out.println("\n🛑 Server shutting down...");
+        System.out.println("\nServer shutting down...");
         server.printStatus();
     }));
     
@@ -601,7 +601,7 @@ public static void main(String[] args) throws IOException {
 5. **Shutdown hook**: Displays final status on exit
 6. **Server start**: Begins main server loop
 
-## 👤 Client.java - Complete Analysis
+## Client.java - Complete Analysis
 
 ### Class Overview
 
@@ -765,7 +765,7 @@ public static void main(String[] args) {
 - Tests multiple lock sequences
 - Simulates concurrent access
 
-## 🧪 DistributedLockTest.java - Complete Analysis
+## DistributedLockTest.java - Complete Analysis
 
 ### Class Overview
 
@@ -848,7 +848,7 @@ private static void testClient(String clientId, String serverIp, int port, Strin
 3. **Release**: Release the lock
 4. **Final check**: Verify release
 
-## 🔄 Communication Flow
+## Communication Flow
 
 ### Client to Follower Flow
 
@@ -883,7 +883,7 @@ Client → Server → Client
 2. **Local response**: Server responds from local map
 3. **No synchronization**: Read-only operation
 
-## 📊 Data Structures
+## Data Structures
 
 ### Lock Map
 
@@ -914,7 +914,7 @@ private List<String> followerServers = new ArrayList<>();
 - **ADD**: Register new follower
 - **ITERATE**: Notify all followers
 
-## 🧵 Threading Model
+## Threading Model
 
 ### Thread Pool
 
@@ -944,7 +944,7 @@ private synchronized void processSync(String syncMsg)
 
 **Protection**: Ensures thread-safe access to shared data
 
-## ⚠️ Error Handling
+## Error Handling
 
 ### Connection Errors
 
@@ -980,7 +980,7 @@ if (parts.length < 3) {
 
 **Validation**: Checks message format before processing
 
-## 📡 Protocol Details
+## Protocol Details
 
 ### Message Formats
 

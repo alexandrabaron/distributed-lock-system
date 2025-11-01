@@ -1,4 +1,4 @@
-# 🔒 Distributed Lock System with Consensus
+# Distributed Lock System with Consensus
 
 A distributed consensus system implementing a distributed lock mechanism with one leader server and multiple follower servers, ensuring data consistency through replication.
 
@@ -21,12 +21,12 @@ This project implements a distributed consensus system that allows multiple clie
 
 ### Key Features
 
-- ✅ **Leader-Follower Architecture** with automatic replication
-- ✅ **Strong consistency** of data across all servers
-- ✅ **Robust synchronization protocol** with ACK and timeouts
-- ✅ **Advanced error handling** with detailed logging
-- ✅ **Real-time monitoring** of server status
-- ✅ **Socket communication** for network connectivity
+- **Leader-Follower Architecture** with automatic replication
+- **Strong consistency** of data across all servers
+- **Robust synchronization protocol** with ACK and timeouts
+- **Advanced error handling** with detailed logging
+- **Real-time monitoring** of server status
+- **Socket communication** for network connectivity
 
 ## Architecture
 
@@ -95,7 +95,7 @@ This project implements a distributed consensus system that allows multiple clie
    sudo ufw allow 5000
    ```
 
-## ⚙️ Configuration
+## Configuration
 
 ### Network Configuration
 
@@ -317,7 +317,7 @@ The system displays detailed logs with:
 
 ---
 
-**🎉 Thank you for using our distributed lock system!**
+**Thank you for using our distributed lock system!**
 
 
 
