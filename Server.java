@@ -353,6 +353,15 @@ public class Server {
     private void notifyFollowers(String message) {
         System.out.println("[" + serverIp + "] Notifying " + followerServers.size() + " followers with message: " + message);
         
+        if (followerServers.isEmpty()) {
+            System.out.println("[" + serverIp + "] No followers to notify");
+            return;
+        }
+        
+        // Use CountDownLatch to wait for all ACKs (synchronous replication)
+        CountDownLatch latch = new CountDownLatch(followerServers.size());
+        List<Exception> errors = Collections.synchronizedList(new ArrayList<>());
+        
         for (String follower : followerServers) {
             String[] parts = follower.split(":");
             String ip = parts[0];
@@ -369,18 +378,39 @@ public class Server {
                     System.out.println("[" + serverIp + "] Sending SYNC to " + follower + ": " + message);
                     out.println("SYNC," + message);
                     
-                    // Wait for ACK
+                    // Wait for ACK (synchronous replication)
                     String ack = in.readLine();
                     if ("ACK".equals(ack)) {
                         System.out.println("[" + serverIp + "] Received ACK from " + follower);
                     } else {
                         System.err.println("[" + serverIp + "] Unexpected response from " + follower + ": " + ack);
+                        errors.add(new IOException("Unexpected ACK: " + ack));
                     }
                     
                 } catch (IOException e) {
                     System.err.println("[" + serverIp + "] Failed to notify follower " + follower + ": " + e.getMessage());
+                    errors.add(e);
+                } finally {
+                    // Decrement latch count (even if there was an error)
+                    latch.countDown();
                 }
             });
+        }
+        
+        // Wait for all followers to acknowledge (synchronous replication)
+        try {
+            boolean allAcked = latch.await(10, java.util.concurrent.TimeUnit.SECONDS);
+            if (!allAcked) {
+                System.err.println("[" + serverIp + "] Timeout waiting for ACKs from all followers");
+            } else if (!errors.isEmpty()) {
+                System.err.println("[" + serverIp + "] Some followers failed to acknowledge: " + errors.size() + " errors");
+                // Continue anyway - replication attempted but some followers may not have received it
+            } else {
+                System.out.println("[" + serverIp + "] All followers acknowledged (synchronous replication complete)");
+            }
+        } catch (InterruptedException e) {
+            System.err.println("[" + serverIp + "] Interrupted while waiting for ACKs");
+            Thread.currentThread().interrupt();
         }
     }
 

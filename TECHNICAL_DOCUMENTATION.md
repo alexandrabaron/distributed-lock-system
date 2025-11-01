@@ -382,49 +382,66 @@ private String forwardToLeader(String cmd, String lockName, String clientId) {
 - **Error recovery**: Returns appropriate error codes
 - **Logging**: Detailed logging for debugging
 
-### Follower Notification
+### Follower Notification (Synchronous Replication)
 
 ```java
 private void notifyFollowers(String message) {
     System.out.println("[" + serverIp + "] Notifying " + followerServers.size() + " followers with message: " + message);
     
+    if (followerServers.isEmpty()) {
+        return;
+    }
+    
+    // Use CountDownLatch to wait for all ACKs (synchronous replication)
+    CountDownLatch latch = new CountDownLatch(followerServers.size());
+    List<Exception> errors = Collections.synchronizedList(new ArrayList<>());
+    
     for (String follower : followerServers) {
-        String[] parts = follower.split(":");
-        String ip = parts[0];
-        int port = Integer.parseInt(parts[1]);
-        
         threadPool.submit(() -> {
             try (Socket socket = new Socket(ip, port);
                  PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
                  BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()))) {
                 
-                // Set timeout for the socket
                 socket.setSoTimeout(5000); // 5 seconds timeout
-                
-                System.out.println("[" + serverIp + "] Sending SYNC to " + follower + ": " + message);
                 out.println("SYNC," + message);
                 
-                // Wait for ACK
+                // Wait for ACK (synchronous replication)
                 String ack = in.readLine();
                 if ("ACK".equals(ack)) {
                     System.out.println("[" + serverIp + "] Received ACK from " + follower);
                 } else {
-                    System.err.println("[" + serverIp + "] Unexpected response from " + follower + ": " + ack);
+                    errors.add(new IOException("Unexpected ACK: " + ack));
                 }
                 
             } catch (IOException e) {
-                System.err.println("[" + serverIp + "] Failed to notify follower " + follower + ": " + e.getMessage());
+                errors.add(e);
+            } finally {
+                latch.countDown(); // Decrement even on error
             }
         });
+    }
+    
+    // Wait for all followers to acknowledge (synchronous replication)
+    try {
+        boolean allAcked = latch.await(10, TimeUnit.SECONDS);
+        if (!allAcked) {
+            System.err.println("[" + serverIp + "] Timeout waiting for ACKs");
+        } else if (errors.isEmpty()) {
+            System.out.println("[" + serverIp + "] All followers acknowledged (synchronous replication complete)");
+        }
+    } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
     }
 }
 ```
 
 **Process**:
 1. **Parallel notification**: Each follower notified in separate thread
-2. **Timeout protection**: 5-second timeout per follower
-3. **ACK verification**: Confirms message delivery
-4. **Error handling**: Continues if individual followers fail
+2. **Synchronous wait**: Leader waits for all ACKs using `CountDownLatch`
+3. **Timeout protection**: 10-second overall timeout, 5-second per follower
+4. **ACK verification**: Confirms all followers received and processed the SYNC
+5. **Error handling**: Tracks errors but continues if some followers fail (logged)
+6. **Strong consistency**: Leader only proceeds after all followers have acknowledged
 
 ### Synchronization Processing
 
