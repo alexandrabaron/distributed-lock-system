@@ -173,13 +173,27 @@ This test performs:
 
 ### Manual Test
 
+**Note**: When testing manually with separate client instances, each client completes its test sequence quickly. To observe true concurrency:
+
+**Option 1 - Launch clients simultaneously** (in separate terminals):
 ```bash
-# Sequential test
+# Terminal 1
 java Client 10.0.2.3 5000 Client1
 
-# Concurrent test (in another terminal)
+# Terminal 2 (launch at the same time or very quickly)
 java Client 10.0.2.4 5000 Client2
 ```
+
+**Option 2 - Use DistributedLockTest** (recommended for concurrent testing):
+```bash
+java DistributedLockTest
+```
+This automatically launches multiple clients in parallel and tests concurrent lock acquisition.
+
+**Understanding the results**:
+- Each client will test `lock1` and `lock2` independently
+- If both clients try to acquire the same lock simultaneously, only one will succeed (SUCCESS) and the other will fail (FAIL)
+- The delays added in Client.java (500ms between operations) allow better observation of concurrent behavior
 
 ### Expected Results
 
