@@ -12,6 +12,18 @@ public class Server {
     private ServerSocket serverSocket;
     private ExecutorService threadPool = Executors.newCachedThreadPool();
     
+    // Pending requests: key = lockName+clientId+cmd, value = PendingRequestInfo (socket and writer)
+    private static class PendingRequestInfo {
+        Socket socket;
+        PrintWriter writer;
+        
+        PendingRequestInfo(Socket socket, PrintWriter writer) {
+            this.socket = socket;
+            this.writer = writer;
+        }
+    }
+    private Map<String, PendingRequestInfo> pendingRequests = new ConcurrentHashMap<>();
+    
     // Configuration for multiple servers (VM setup)
     private static final Map<String, Integer> SERVER_PORTS = new HashMap<>();
     static {
@@ -62,11 +74,15 @@ public class Server {
     // Dans Server.java
 
     private void handleClient(Socket socket) {
-        try (BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-            PrintWriter out = new PrintWriter(socket.getOutputStream(), true)) {
+        try {
+            BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+            PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
 
             String msg = in.readLine();
-            if (msg == null) return;
+            if (msg == null) {
+                socket.close();
+                return;
+            }
 
             System.out.println("[" + serverIp + "] Received message: " + msg);
 
@@ -74,19 +90,30 @@ public class Server {
             if (msg.startsWith("SYNC,")) {
                 // Synchronization message from leader to followers
                 handleSyncMessage(msg, out);
+                socket.close();
             
             } else if (msg.startsWith("REGISTER,")) {
                 // Registration message from follower to leader
                 handleRegistrationMessage(msg, out);
+                socket.close();
                 
             } else {
                 // Client request message (LOCK/UNLOCK/OWN)
-                handleClientRequest(msg, out);
+                boolean keepOpen = handleClientRequest(msg, out, socket);
+                if (!keepOpen) {
+                    socket.close();
+                }
+                // If keepOpen is true, socket will be closed when pending request is fulfilled
             }
 
         } catch (IOException e) {
             System.err.println("Error handling client connection: " + e.getMessage());
             e.printStackTrace();
+            try {
+                socket.close();
+            } catch (IOException e2) {
+                // Ignore
+            }
         }
     }
 
@@ -112,12 +139,12 @@ public class Server {
         }
     }
 
-    private void handleClientRequest(String msg, PrintWriter out) {
+    private boolean handleClientRequest(String msg, PrintWriter out, Socket socket) {
         String[] parts = msg.split(",");
         if (parts.length < 3) {
             System.out.println("[" + serverIp + "] Invalid message format: " + msg);
             out.println("INVALID_FORMAT");
-            return;
+            return false; // Close socket
         }
         
         String cmd = parts[0];
@@ -126,10 +153,43 @@ public class Server {
 
         System.out.println("[" + serverIp + "] Processing client request: " + cmd + " for lock: " + lockName + " by client: " + clientId);
         
-        String response = processRequest(cmd, lockName, clientId);
-        out.println(response);
+        // For OWN requests, respond immediately (no pending mechanism needed)
+        if (cmd.equals("OWN")) {
+            String response = processRequest(cmd, lockName, clientId);
+            out.println(response);
+            System.out.println("[" + serverIp + "] Sent response: " + response);
+            return false; // Close socket
+        }
         
-        System.out.println("[" + serverIp + "] Sent response: " + response);
+        // For LOCK/UNLOCK on leader, respond immediately
+        if (isLeader) {
+            String response = processRequest(cmd, lockName, clientId);
+            out.println(response);
+            System.out.println("[" + serverIp + "] Sent response: " + response);
+            return false; // Close socket
+        }
+        
+        // For LOCK/UNLOCK on follower: mark as pending and forward to leader
+        // The response will be sent when SYNC is received
+        if (cmd.equals("LOCK") || cmd.equals("UNLOCK")) {
+            String pendingKey = lockName + ":" + clientId + ":" + cmd;
+            pendingRequests.put(pendingKey, new PendingRequestInfo(socket, out));
+            System.out.println("[" + serverIp + "] Marked request as pending: " + pendingKey);
+            
+            // Forward to leader (but don't respond to client yet - will respond when SYNC arrives)
+            forwardToLeaderForPending(cmd, lockName, clientId, pendingKey);
+            
+            // Keep connection open - will be closed when SYNC response is sent
+            // Set timeout to prevent hanging connections
+            try {
+                socket.setSoTimeout(30000); // 30 seconds timeout for pending requests
+            } catch (IOException e) {
+                System.err.println("[" + serverIp + "] Error setting timeout: " + e.getMessage());
+            }
+            return true; // Keep socket open
+        }
+        
+        return false; // Close socket
     }
 
     // AJOUTER CETTE NOUVELLE MÉTHODE DANS Server.java
@@ -153,6 +213,24 @@ public class Server {
         } else if (cmd.equals("UNLOCK")) {
             lockMap.remove(lockName);
             System.out.println("FOLLOWER (" + serverIp + "): Synced UNLOCK " + lockName);
+        }
+        
+        // Check if this request is pending (according to subject requirements)
+        String pendingKey = lockName + ":" + clientId + ":" + cmd;
+        PendingRequestInfo pendingInfo = pendingRequests.remove(pendingKey);
+        
+        if (pendingInfo != null) {
+            // Request is pending - send answer to client (as per subject)
+            pendingInfo.writer.println("SUCCESS");
+            System.out.println("[" + serverIp + "] Request was pending, sent SUCCESS to client for: " + pendingKey);
+            // Close socket after sending response
+            try {
+                pendingInfo.socket.close();
+            } catch (IOException e) {
+                System.err.println("[" + serverIp + "] Error closing socket after pending response: " + e.getMessage());
+            }
+        } else {
+            System.out.println("[" + serverIp + "] No pending request found for: " + pendingKey + " (may have been from leader or already processed)");
         }
     }
 
@@ -204,56 +282,72 @@ public class Server {
             System.out.println("[" + serverIp + "] Follower returning owner: " + owner);
             return owner;
             
-        } else if (cmd.equals("LOCK") || cmd.equals("UNLOCK")) {
-            // For legitimate operations, slave server forwards the request to primary server
-            System.out.println("[" + serverIp + "] Forwarding " + cmd + " request to leader");
-            String leaderResponse = forwardToLeader(cmd, lockName, clientId);
-            
-            // If the leader approved the operation, update local map
-            if ("SUCCESS".equals(leaderResponse)) {
-                synchronized (this) {
-                    if (cmd.equals("LOCK")) {
-                        lockMap.put(lockName, clientId);
-                        System.out.println("[" + serverIp + "] Follower updated local map: LOCK " + lockName + " -> " + clientId);
-                    } else if (cmd.equals("UNLOCK")) {
-                        lockMap.remove(lockName);
-                        System.out.println("[" + serverIp + "] Follower updated local map: UNLOCK " + lockName);
-                    }
-                }
-            }
-            
-            System.out.println("[" + serverIp + "] Follower returning leader response: " + leaderResponse);
-            return leaderResponse;
-            
         } else {
-            System.out.println("[" + serverIp + "] Invalid command: " + cmd);
+            // LOCK/UNLOCK handled in handleClientRequest with pending mechanism
+            System.out.println("[" + serverIp + "] Invalid command or should be handled with pending: " + cmd);
             return "INVALID_COMMAND";
         }
     }
 
-    private String forwardToLeader(String cmd, String lockName, String clientId) {
-        try (Socket leaderSocket = new Socket("10.0.2.3", 5000);
-             PrintWriter out = new PrintWriter(leaderSocket.getOutputStream(), true);
-             BufferedReader in = new BufferedReader(new InputStreamReader(leaderSocket.getInputStream()))) {
+    private void forwardToLeaderForPending(String cmd, String lockName, String clientId, String pendingKey) {
+        // This method forwards to leader but doesn't respond to client
+        // The response will be sent when SYNC is received
+        threadPool.submit(() -> {
+            try (Socket leaderSocket = new Socket("10.0.2.3", 5000);
+                 PrintWriter out = new PrintWriter(leaderSocket.getOutputStream(), true);
+                 BufferedReader in = new BufferedReader(new InputStreamReader(leaderSocket.getInputStream()))) {
 
-            // Set timeout for the socket
-            leaderSocket.setSoTimeout(10000); // 10 seconds timeout
+                // Set timeout for the socket
+                leaderSocket.setSoTimeout(10000); // 10 seconds timeout
 
-            String request = cmd + "," + lockName + "," + clientId;
-            System.out.println("[" + serverIp + "] Forwarding to leader: " + request);
-            out.println(request);
-            
-            String response = in.readLine();
-            System.out.println("[" + serverIp + "] Received from leader: " + response);
-            return response != null ? response : "ERROR";
-
-        } catch (java.net.SocketTimeoutException e) {
-            System.err.println("[" + serverIp + "] Timeout while forwarding to leader: " + e.getMessage());
-            return "TIMEOUT";
-        } catch (IOException e) {
-            System.err.println("[" + serverIp + "] Error forwarding to leader: " + e.getMessage());
-            return "ERROR";
-        }
+                String request = cmd + "," + lockName + "," + clientId;
+                System.out.println("[" + serverIp + "] Forwarding to leader (pending): " + request);
+                out.println(request);
+                
+                String response = in.readLine();
+                System.out.println("[" + serverIp + "] Received from leader: " + response);
+                
+                // If leader returns FAIL, respond immediately (no need to wait for SYNC)
+                if (response != null && response.equals("FAIL")) {
+                    PendingRequestInfo pendingInfo = pendingRequests.remove(pendingKey);
+                    if (pendingInfo != null) {
+                        pendingInfo.writer.println("FAIL");
+                        System.out.println("[" + serverIp + "] Sent FAIL response for pending request: " + pendingKey);
+                        try {
+                            pendingInfo.socket.close();
+                        } catch (IOException e) {
+                            System.err.println("[" + serverIp + "] Error closing socket: " + e.getMessage());
+                        }
+                    }
+                }
+                // If SUCCESS, wait for SYNC message to respond
+                
+            } catch (java.net.SocketTimeoutException e) {
+                System.err.println("[" + serverIp + "] Timeout while forwarding to leader: " + e.getMessage());
+                PendingRequestInfo pendingInfo = pendingRequests.remove(pendingKey);
+                if (pendingInfo != null) {
+                    pendingInfo.writer.println("TIMEOUT");
+                    System.out.println("[" + serverIp + "] Sent TIMEOUT response for pending request: " + pendingKey);
+                    try {
+                        pendingInfo.socket.close();
+                    } catch (IOException e2) {
+                        System.err.println("[" + serverIp + "] Error closing socket: " + e2.getMessage());
+                    }
+                }
+            } catch (IOException e) {
+                System.err.println("[" + serverIp + "] Error forwarding to leader: " + e.getMessage());
+                PendingRequestInfo pendingInfo = pendingRequests.remove(pendingKey);
+                if (pendingInfo != null) {
+                    pendingInfo.writer.println("ERROR");
+                    System.out.println("[" + serverIp + "] Sent ERROR response for pending request: " + pendingKey);
+                    try {
+                        pendingInfo.socket.close();
+                    } catch (IOException e2) {
+                        System.err.println("[" + serverIp + "] Error closing socket: " + e2.getMessage());
+                    }
+                }
+            }
+        });
     }
 
     private void notifyFollowers(String message) {

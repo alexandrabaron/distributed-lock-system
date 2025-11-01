@@ -205,15 +205,21 @@ sequenceDiagram
     participant L as Leader
     participant F2 as Other Followers
 
-    Note over C,F: Scenario 1: LOCK/UNLOCK Operation
+    Note over C,F: Scenario 1: LOCK/UNLOCK Operation (with pending mechanism)
     C->>F: LOCK/UNLOCK request
+    F->>F: Mark request as pending (keep connection open)
     F->>L: Forward request
     L->>L: Validate & update leader map
-    L->>F2: SYNC message
-    F2->>L: ACK
-    L->>F: SUCCESS response
-    F->>F: Update local map
-    F->>C: SUCCESS response
+    L->>F: SUCCESS/FAIL response
+    alt If FAIL
+        F->>C: FAIL response (close connection)
+    else If SUCCESS
+        L->>F: SYNC message (to all followers)
+        F->>L: ACK
+        F->>F: Update local map
+        F->>F: Check if request is pending
+        F->>C: SUCCESS response (close connection)
+    end
 
     Note over C,F: Scenario 2: OWN Operation (Direct)
     C->>F: OWN request

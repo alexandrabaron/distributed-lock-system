@@ -288,55 +288,65 @@ private String handleLeaderRequest(String cmd, String lockName, String clientId)
 **OWN Logic**:
 - **Always succeeds**: Returns owner or "NONE"
 
+### Pending Request Mechanism
+
+The system implements a "pending request" mechanism as required by the project specifications. When a follower receives a LOCK/UNLOCK request from a client:
+
+1. **Mark as Pending**: The follower marks the request as pending and keeps the client connection open
+2. **Forward to Leader**: The follower forwards the request to the leader asynchronously
+3. **Handle Response**:
+   - **If FAIL**: The follower responds immediately to the client and closes the connection
+   - **If SUCCESS**: The follower waits for the SYNC message from the leader
+4. **Process SYNC**: When the SYNC arrives:
+   - Update the local map
+   - Check if the request is pending
+   - If pending, send SUCCESS response to the client
+   - Close the connection
+
+```java
+private static class PendingRequestInfo {
+    Socket socket;
+    PrintWriter writer;
+    
+    PendingRequestInfo(Socket socket, PrintWriter writer) {
+        this.socket = socket;
+        this.writer = writer;
+    }
+}
+private Map<String, PendingRequestInfo> pendingRequests = new ConcurrentHashMap<>();
+```
+
+**Pending Key Format**: `lockName:clientId:cmd` (e.g., `"myLock:Client1:LOCK"`)
+
 ### Follower Request Handler
 
 ```java
-private String handleFollowerRequest(String cmd, String lockName, String clientId) {
-    System.out.println("[" + serverIp + "] Follower processing request: " + cmd + " for lock: " + lockName);
-    
-    // First check the validity of the operation
+private boolean handleClientRequest(String msg, PrintWriter out, Socket socket) {
+    // For OWN requests, respond immediately
     if (cmd.equals("OWN")) {
-        // To check the owner of a distributed lock, follower accesses its map directly
-        String owner = lockMap.getOrDefault(lockName, "NONE");
-        System.out.println("[" + serverIp + "] Follower returning owner: " + owner);
-        return owner;
-        
-    } else if (cmd.equals("LOCK") || cmd.equals("UNLOCK")) {
-        // For legitimate operations, slave server forwards the request to primary server
-        System.out.println("[" + serverIp + "] Forwarding " + cmd + " request to leader");
-        String leaderResponse = forwardToLeader(cmd, lockName, clientId);
-        
-        // If the leader approved the operation, update local map
-        if ("SUCCESS".equals(leaderResponse)) {
-            synchronized (this) {
-                if (cmd.equals("LOCK")) {
-                    lockMap.put(lockName, clientId);
-                    System.out.println("[" + serverIp + "] Follower updated local map: LOCK " + lockName + " -> " + clientId);
-                } else if (cmd.equals("UNLOCK")) {
-                    lockMap.remove(lockName);
-                    System.out.println("[" + serverIp + "] Follower updated local map: UNLOCK " + lockName);
-                }
-            }
-        }
-        
-        System.out.println("[" + serverIp + "] Follower returning leader response: " + leaderResponse);
-        return leaderResponse;
-        
-    } else {
-        System.out.println("[" + serverIp + "] Invalid command: " + cmd);
-        return "INVALID_COMMAND";
+        String response = processRequest(cmd, lockName, clientId);
+        out.println(response);
+        return false; // Close socket
+    }
+    
+    // For LOCK/UNLOCK on follower: mark as pending
+    if (cmd.equals("LOCK") || cmd.equals("UNLOCK") && !isLeader) {
+        String pendingKey = lockName + ":" + clientId + ":" + cmd;
+        pendingRequests.put(pendingKey, new PendingRequestInfo(socket, out));
+        forwardToLeaderForPending(cmd, lockName, clientId, pendingKey);
+        return true; // Keep socket open
     }
 }
 ```
 
 **OWN Operation**: 
-- **Local processing**: Reads from local map (may be slightly stale)
-- **No forwarding**: Reduces latency for read operations
+- **Local processing**: Reads from local map directly
+- **Immediate response**: Returns owner immediately and closes connection
 
-**LOCK/UNLOCK Operations**:
-- **Forwarding**: Sends request to leader
-- **Local update**: Updates local map if leader approves
-- **Consistency**: Maintains local consistency with leader
+**LOCK/UNLOCK Operations on Follower**:
+- **Pending mechanism**: Marks request as pending, keeps connection open
+- **Forwarding**: Asynchronously forwards to leader
+- **Delayed response**: Responds only when SYNC is received (for SUCCESS) or immediately (for FAIL)
 
 ### Leader Communication
 
@@ -421,7 +431,6 @@ private void notifyFollowers(String message) {
 ```java
 private synchronized void processSync(String syncMsg) {
     // syncMsg is "SYNC,CMD,lockName,clientId"
-    // On enlève "SYNC,"
     String commandData = syncMsg.substring(5); 
     
     String[] parts = commandData.split(",");
@@ -431,7 +440,7 @@ private synchronized void processSync(String syncMsg) {
     String lockName = parts[1];
     String clientId = parts[2];
     
-    // Modifier la map locale comme demandé par le leader
+    // Modify local map as requested by leader
     if (cmd.equals("LOCK")) {
         lockMap.put(lockName, clientId);
         System.out.println("FOLLOWER (" + serverIp + "): Synced LOCK " + lockName + " -> " + clientId);
@@ -439,13 +448,24 @@ private synchronized void processSync(String syncMsg) {
         lockMap.remove(lockName);
         System.out.println("FOLLOWER (" + serverIp + "): Synced UNLOCK " + lockName);
     }
+    
+    // Check if this request is pending (according to subject requirements)
+    String pendingKey = lockName + ":" + clientId + ":" + cmd;
+    PendingRequestInfo pendingInfo = pendingRequests.remove(pendingKey);
+    
+    if (pendingInfo != null) {
+        // Request is pending - send answer to client (as per subject)
+        pendingInfo.writer.println("SUCCESS");
+        pendingInfo.socket.close();
+    }
 }
 ```
 
 **Synchronization Logic**:
-- **LOCK**: Adds lock to local map
-- **UNLOCK**: Removes lock from local map
-- **Thread safety**: Uses `synchronized` for safe map updates
+- **Map Update**: Updates local map with LOCK or UNLOCK operation
+- **Pending Check**: Checks if the request corresponds to a pending client request
+- **Client Response**: If pending, sends SUCCESS response and closes client connection
+- **Thread safety**: Uses `synchronized` for safe map updates and pending request handling
 
 ### Server Registration
 

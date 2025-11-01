@@ -59,9 +59,11 @@ We opted for a \textbf{leader-follower architecture} built on Java TCP sockets. 
 
     \item \textbf{Request Routing}: Followers act as simple routers for write operations, forwarding \texttt{LOCK}/\texttt{UNLOCK} requests to the leader. This design decision is central to ensuring consistency, as it establishes the leader as the single point of truth (or "single-writer") for all state changes, preventing split-brain scenarios.
 
-    \item \textbf{Asynchronous Replication}: The leader uses an asynchronous \texttt{SYNC}/\texttt{ACK} model for replication. When the leader approves a \texttt{LOCK} or \texttt{UNLOCK} operation, it immediately updates its local map and sends a \texttt{SYNC} message to all followers in parallel (using a thread pool). The leader returns \texttt{SUCCESS} to the client \textbf{without waiting} for follower acknowledgments, prioritizing low latency. Followers receive and process the \texttt{SYNC} messages asynchronously, sending \texttt{ACK} responses that the leader logs but does not await.
+    \item \textbf{Pending Request Mechanism}: Following the project specifications, when a follower receives a \texttt{LOCK} or \texttt{UNLOCK} request, it marks the request as \emph{pending} and keeps the client connection open. The follower forwards the request to the leader. If the leader returns \texttt{FAIL}, the follower responds immediately. If the leader returns \texttt{SUCCESS}, the follower waits for the \texttt{SYNC} message. When the \texttt{SYNC} arrives, the follower updates its local map, checks if the request is pending, and if so, sends the \texttt{SUCCESS} response to the client. This mechanism ensures that clients receive confirmation only after the state change has been replicated via the \texttt{SYNC} message.
     
-    \item \textbf{Reasoning (Consistency)}: This asynchronous approach provides eventual consistency rather than strong consistency. When a client receives a \texttt{SUCCESS} response, it has a guarantee that the state change has been accepted by the leader, but the replication to followers happens asynchronously. This creates a small window where a follower might serve stale data for an \texttt{OWN} request immediately after a successful \texttt{LOCK} or \texttt{UNLOCK}. This trade-off was chosen to reduce latency for write operations, and in practice, the replication typically completes quickly (within milliseconds) due to the local network setup. A synchronous approach would provide stronger consistency guarantees but at the cost of higher latency and reduced throughput.
+    \item \textbf{Asynchronous Replication}: The leader uses an asynchronous \texttt{SYNC}/\texttt{ACK} model for replication. When the leader approves a \texttt{LOCK} or \texttt{UNLOCK} operation, it immediately updates its local map and sends a \texttt{SYNC} message to all followers in parallel (using a thread pool). The leader returns \texttt{SUCCESS} to the follower \textbf{without waiting} for follower acknowledgments. However, the follower that forwarded the request waits for the \texttt{SYNC} before responding to its client, providing stronger consistency guarantees for that particular client.
+    
+    \item \textbf{Reasoning (Consistency)}: The pending request mechanism provides improved consistency: when a client receives a \texttt{SUCCESS} response from a follower, it has a guarantee that the state change has been accepted by the leader \textbf{and} replicated to that follower (via the \texttt{SYNC} message). For clients connecting directly to the leader, they receive immediate confirmation, but the replication still happens asynchronously. This hybrid approach balances consistency (for followers) with low latency (for leader connections).
 
     \item \textbf{Simple Error Handling}: The system relies on socket timeouts (5-10s) and explicit response codes (\texttt{SUCCESS}/\texttt{FAIL}/\texttt{NONE}/\texttt{ERROR}/\texttt{TIMEOUT}). This provides basic robustness against network delays or unresponsive servers without implementing a complex failure-detection and leader-election protocol, which was deemed outside the project's scope.
 \end{itemize}
@@ -70,8 +72,16 @@ We opted for a \textbf{leader-follower architecture} built on Java TCP sockets. 
 The system's functional architecture is centralized around the leader, which serializes all state changes. The interactions are as follows:
 
 \begin{enumerate}
-    \item \textbf{Write Operation (LOCK/UNLOCK)}: Client $\rightarrow$ Follower $\rightarrow$ Leader $\rightarrow$ [Leader updates map and returns SUCCESS immediately] $\parallel$ [Leader sends SYNC to all followers asynchronously] $\rightarrow$ Followers $\rightarrow$ ACK. If the client contacts the leader directly, the follower forwarding steps are skipped. Note that when a follower forwards a request, it receives the leader's response, updates its local map immediately, and later receives a \texttt{SYNC} message from the leader (which results in a redundant update that is idempotent).
-    \item \textbf{Read Operation (OWN)}: Client $\rightarrow$ (Any) Server $\rightarrow$ Client. This operation is handled locally by whichever server receives it to ensure low latency. Due to asynchronous replication, a follower might return slightly stale data immediately after a write operation.
+    \item \textbf{Write Operation (LOCK/UNLOCK)}: 
+    \begin{itemize}
+        \item \textbf{From Follower}: Client $\rightarrow$ Follower (marks request as \emph{pending}, keeps connection open) $\rightarrow$ Leader $\rightarrow$ Leader processes and responds SUCCESS/FAIL to follower. 
+        \begin{itemize}
+            \item If \texttt{FAIL}: Follower responds immediately to client and closes connection.
+            \item If \texttt{SUCCESS}: Leader sends \texttt{SYNC} to all followers $\rightarrow$ Follower receives \texttt{SYNC} $\rightarrow$ Follower updates local map $\rightarrow$ Follower checks if request is \emph{pending} $\rightarrow$ If pending, follower sends \texttt{SUCCESS} to client and closes connection.
+        \end{itemize}
+        \item \textbf{From Leader}: Client $\rightarrow$ Leader $\rightarrow$ Leader processes, updates map, responds immediately, and sends \texttt{SYNC} to all followers asynchronously.
+    \end{itemize}
+    \item \textbf{Read Operation (OWN)}: Client $\rightarrow$ (Any) Server $\rightarrow$ Client. This operation is handled locally by whichever server receives it to ensure low latency. The response is sent immediately and the connection is closed.
     \item \textbf{Follower Registration}: When a follower server starts, it sends a \texttt{REGISTER,\$ip:\$port} message to the leader. The leader adds the follower to its internal list and responds with \texttt{REGISTERED}. This allows the leader to know which followers to notify during replication.
 \end{enumerate}
 
@@ -95,19 +105,27 @@ The project consists of three main Java classes:
     
     \item \textbf{\texttt{Server.java}}: This is the core class, capable of running in either "leader" or "follower" mode. It uses a \texttt{CachedThreadPool} to handle each incoming connection in a separate thread (\texttt{handleClient()}).
         \begin{itemize}
-            \item \texttt{handleClientRequest()}: Parses client messages (\texttt{LOCK}, \texttt{UNLOCK}, \texttt{OWN}) and routes them to \texttt{processRequest()}.
-            \item \texttt{processRequest()}: This \texttt{synchronized} method is the main logic gate.
+            \item \texttt{handleClientRequest()}: Parses client messages (\texttt{LOCK}, \texttt{UNLOCK}, \texttt{OWN}) and handles them according to the server role. For \texttt{OWN} requests, it responds immediately. For \texttt{LOCK}/\texttt{UNLOCK} on a leader, it processes and responds immediately. For \texttt{LOCK}/\texttt{UNLOCK} on a follower, it implements the \emph{pending request} mechanism (see below).
+            \item \texttt{processRequest()}: This \texttt{synchronized} method is the main logic gate for business rule enforcement.
                 \begin{itemize}
                     \item If \textbf{isLeader}, it calls \texttt{handleLeaderRequest()} to enforce business rules, update the local \texttt{lockMap}, and trigger replication via \texttt{notifyFollowers()}.
-                    \item If \textbf{isFollower}, it calls \texttt{handleFollowerRequest()}.
+                    \item If \textbf{isFollower}, it calls \texttt{handleFollowerRequest()} (only used for \texttt{OWN} requests in the pending implementation).
                 \end{itemize}
-            \item \texttt{handleFollowerRequest()}:
+            \item \textbf{Pending Request Mechanism} (for LOCK/UNLOCK on followers): When a follower receives a \texttt{LOCK} or \texttt{UNLOCK} request:
                 \begin{itemize}
-                    \item For \texttt{OWN}, it reads its local \texttt{lockMap} and returns the value (fast, local read).
-                    \item For \texttt{LOCK}/\texttt{UNLOCK}, it forwards the request to the leader via \texttt{forwardToLeader()}. If the leader returns \texttt{SUCCESS}, the follower immediately updates its local \texttt{lockMap} to reduce latency for subsequent reads. The follower then returns the leader's response to the client. Note that this creates a redundant update scenario: the follower will update its map again when it receives the \texttt{SYNC} message from the leader (which is sent to all followers, including the one that forwarded the request). This redundancy is idempotent and helps ensure consistency.
+                    \item The request is marked as \emph{pending} (stored in \texttt{pendingRequests} map with key \texttt{lockName:clientId:cmd}) and the client connection is kept open.
+                    \item The request is forwarded to the leader asynchronously via \texttt{forwardToLeaderForPending()}.
+                    \item If the leader returns \texttt{FAIL}, the follower responds immediately to the client and closes the connection.
+                    \item If the leader returns \texttt{SUCCESS}, the follower waits for the \texttt{SYNC} message.
+                \end{itemize}
+            \item \texttt{processSync()}: Called when a follower receives a \texttt{SYNC} message from the leader. This method:
+                \begin{itemize}
+                    \item Updates the local \texttt{lockMap} according to the SYNC command.
+                    \item Checks if the request is \emph{pending} (by constructing the pending key from the SYNC parameters).
+                    \item If the request is pending, sends \texttt{SUCCESS} response to the client and closes the connection.
+                    \item Sends \texttt{ACK} back to the leader.
                 \end{itemize}
             \item \texttt{notifyFollowers()}: The leader iterates through its list of followers, submitting a new task to the thread pool for each one to send a \texttt{SYNC} message in parallel. Each task waits for an \texttt{ACK} from its assigned follower, but the leader does not block the main request handling thread waiting for these acknowledgments. This enables asynchronous replication.
-            \item \texttt{handleSyncMessage()}: Triggered when a message starts with \texttt{SYNC,}. This is how a follower receives updates from the leader. It calls \texttt{processSync()} to apply the change to its local \texttt{lockMap} and sends back an \texttt{ACK}. Note that when a follower forwards a request to the leader, it may update its local map immediately upon receiving \texttt{SUCCESS}, and then receive a \texttt{SYNC} message causing a second (idempotent) update.
         \end{itemize}
 \end{itemize}
 
@@ -198,7 +216,7 @@ The following figures illustrate the system in operation, using three virtual ma
 \section{Limitations and Future Work}
 While functional, this implementation has several limitations that could be addressed in future work.
 \begin{itemize}
-    \item \textbf{Pending State}: The project subject mentioned checking if a request is "pending". Our implementation is fully synchronous from the follower's perspective (forward $\rightarrow$ wait for response). A more advanced implementation could have the follower track "pending" requests it has forwarded but not yet received a \texttt{SYNC} confirmation for.
+    \item \textbf{Pending State}: The pending request mechanism is fully implemented according to the project specifications. When a follower forwards a request to the leader and receives \texttt{SUCCESS}, it waits for the \texttt{SYNC} message before responding to the client. The system tracks pending requests using a map with keys in the format \texttt{lockName:clientId:cmd}.
     \item \textbf{Hard-coded Configuration}: The leader's address (10.0.2.3) and the list of followers are hard-coded in \texttt{Server.java}. This is inflexible. A better solution would use a configuration file or command-line arguments to define the cluster topology.
     \item \textbf{Fault Tolerance}: The system has a single point of failure (SPOF): the leader. If the leader server crashes, the system can no longer process any \texttt{LOCK} or \texttt{UNLOCK} requests. A robust system would require a fault-tolerance mechanism, such as leader election (e.g., using Paxos or Raft), which was outside the scope of this project.
     \item \textbf{Network}: Communication is unencrypted (plaintext), and there is no client authentication. This is insecure for a production environment.
